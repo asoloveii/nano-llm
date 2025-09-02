@@ -223,26 +223,13 @@ class MLA(nn.Module):
         q = torch.concat([q_nope, q_rope], dim=-1)
         k = torch.concat([k_nope, k_rope], dim=-1)
 
-        q = q.view(batch_size, seq_len, self.n_heads, self.qk_head_dim)
-        k = k.view(batch_size, seq_len, self.n_heads, self.qk_head_dim)
-        v = v.view(batch_size, seq_len, self.n_heads, self.v_head_dim)
+        q = q.view(batch_size, seq_len, self.n_heads, self.qk_head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.n_heads, self.qk_head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.n_heads, self.v_head_dim).transpose(1, 2)
 
-        # transpose for attention: (batch, heads, seq, dim)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-        
-        # calculate scaled dot product attention scores
-        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.qk_head_dim)
-        attn_weights = torch.softmax(attn_scores, dim=-1)
-
-        # apply mask
-        mask = torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool), diagonal=1)
-        attn_weights = attn_weights.masked_fill(mask, float('-inf'))
-
-        # multiply attention weights with values
-        scores = torch.matmul(attn_weights, v)  # (batch, heads, seq, v_dim)
-        scores = scores.transpose(1, 2).contiguous()  # (batch, seq, heads, v_dim)
+        # calculate attention and apply output projection
+        scores = F.scaled_dot_product_attention(q, k, v, is_causal=True)  # (batch, heads, seq, v_dim)
+        scores = scores.transpose(1, 2).contiguous()                      # (batch, seq, heads, v_dim)
         scores = scores.view(batch_size, seq_len, self.n_heads * self.v_head_dim)
         out = self.out_proj(scores)
 
