@@ -72,7 +72,6 @@ class InstructionDataset(Dataset):
         return self.num_examples
 
     def __getitem__(self, idx):
-        print(self.data.shape)
         prompt = torch.as_tensor(self.data[idx, 0, :self.max_len], dtype=torch.long)
         response = torch.as_tensor(self.data[idx, 1, :self.max_len], dtype=torch.long)
 
