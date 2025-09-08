@@ -6,15 +6,15 @@ import numpy as np
 
 class OpenWebTextDataset(Dataset):
 
-    def __init__(self, tokens_path: str, seq_len: int, dtype=np.uint32, randomize: bool = True):
+    def __init__(self, tokens_path: str, seq_len: int, dtype=np.uint16, randomize: bool = True):
         """
-        Dataset for plain text pretraining (e.g., OpenWebText).
+        Dataset for plain text pretraining (OpenWebText).
         Provides random or sequential slices of tokens for autoregressive training.
 
         Args:
-            tokens_path (str): Path to the memmap .dat file of tokens.
+            tokens_path (str): Path to the memmap .npy file of tokens.
             seq_len (int): Length of token sequences to sample.
-            dtype (np.dtype): Data type used in memmap (default: np.uint32).
+            dtype (np.dtype): Data type used in memmap (default: np.uint16).
             randomize (bool): If True, sample random windows; else use sequential windows.
 
         Returns:
@@ -28,24 +28,25 @@ class OpenWebTextDataset(Dataset):
         self.randomize = randomize
 
     def __len__(self):
-        return self.total_tokens // self.seq_len
+        # return the number of distince sequences
+        return (self.total_tokens - 1) // self.seq_len
 
     def __getitem__(self, idx: int):
         if self.randomize:
+            # randomly choosing a chunk from data usually helps with generalization
             start = torch.randint(0, self.total_tokens - self.seq_len - 1, (1,)).item()
         else:
             start = idx * self.seq_len
 
-        x = self.data[start:start+self.seq_len]
-        y = self.data[start+1:start+self.seq_len+1]
+        x = torch.as_tensor(self.data[start:start+self.seq_len], dtype=torch.long)
+        y = torch.as_tensor(self.data[start+1:start+self.seq_len+1], dtype=torch.long)
 
-        return (torch.from_numpy(x.astype(np.int64)),
-                torch.from_numpy(y.astype(np.int64)))
+        return x, y
     
 
 class InstructionDataset(Dataset):
 
-    def __init__(self, tokens_path: str, max_prompt_len: int = 256, max_response_len: int = 256):
+    def __init__(self, tokens_path: str, num_examples: int, max_len: int = 1024):
         """
         Dataset for instruction tuning.
         Each example consists of a prompt and a response.
@@ -63,18 +64,17 @@ class InstructionDataset(Dataset):
                 - prompt positions = -100 (ignored in loss)
                 - response positions = token IDs (used for loss)
         """
-        self.data = np.memmap(tokens_path, dtype=np.uint32, mode="r")
-        self.num_examples = self.data.shape[0]
-        self.max_prompt_len = max_prompt_len
-        self.max_response_len = max_response_len
-        self.total_len = max_prompt_len + max_response_len
+        self.data = np.memmap(tokens_path, dtype=np.uint16, mode="r", shape=(num_examples, 2, max_len))
+        self.num_examples = num_examples
+        self.max_len = max_len
 
     def __len__(self):
         return self.num_examples
 
     def __getitem__(self, idx):
-        prompt = torch.from_numpy(self.data[idx, 0, :self.max_prompt_len].astype(np.int64))
-        response = torch.from_numpy(self.data[idx, 1, :self.max_response_len].astype(np.int64))
+        print(self.data.shape)
+        prompt = torch.as_tensor(self.data[idx, 0, :self.max_len], dtype=torch.long)
+        response = torch.as_tensor(self.data[idx, 1, :self.max_len], dtype=torch.long)
 
         # concatenate prompt + response
         x = torch.cat([prompt, response])
@@ -88,17 +88,17 @@ class InstructionDataset(Dataset):
         return x, labels
 
 
-def get_dataloader(dataset_type: str, 
-                   dataset_name: str,
-                   data_path: str, 
+def get_dataloader(dataset: str,
+                   data_dir: str, 
+                   num_examples: int,
                    seq_len: int, 
                    batch_size: int, 
-                   num_workers: int = 2):
+                   num_workers: int = 0):
     """
     Utility function to build a DataLoader for either pretraining or instruction tuning.
 
     Args:
-        dataset_type (str): "pretraining" or "instruction".
+        dataset (str): "owt", "sni" or "gsm8k".
         tokens_path (str): Path to memmap .dat file.
         seq_len (int): Sequence length for pretraining dataset (ignored for instruction dataset).
         batch_size (int): Number of samples per batch.
@@ -107,24 +107,21 @@ def get_dataloader(dataset_type: str,
     Returns:
         DataLoader: Iterable over batches of (x, y).
     """
-    # define path
-    train_path = os.path.join(data_path, f"{dataset_name}_train.dat")
-    val_path = os.path.join(data_path, f"{dataset_name}_validation.dat")
+    train_path = os.path.join(data_dir, f"{dataset}_train.npy")
+    val_path = os.path.join(data_dir, f"{dataset}_val.npy")
 
     # use appropriate dataset class
-    if dataset_type == "pretraining":
+    if dataset == "owt":
         train_dataset = OpenWebTextDataset(train_path, seq_len)
         val_dataset = OpenWebTextDataset(val_path, seq_len)
-    elif dataset_type == "instruction":
-        train_dataset = InstructionDataset(train_path, max_prompt_len=seq_len//2, 
-                                           max_response_len=seq_len//2)
-        val_dataset = InstructionDataset(val_path, max_prompt_len=seq_len//2, 
-                                         max_response_len=seq_len//2)
+    elif dataset == "sni":
+        train_dataset = InstructionDataset(train_path, num_examples, max_len=seq_len//2)
+        val_dataset = InstructionDataset(val_path, num_examples, max_len=seq_len//2)
     
-    # return data loader
+    # create data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, 
-                              shuffle=True, num_workers=num_workers, pin_memory=True)
+                              shuffle=True, num_workers=num_workers)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, 
-                            shuffle=False, num_workers=num_workers, pin_memory=True)
+                              shuffle=True, num_workers=num_workers)
     
     return train_loader, val_loader
