@@ -1,6 +1,6 @@
 import os
 import time
-import json
+import yaml
 import argparse
 from typing import Dict, Any
 
@@ -8,14 +8,16 @@ import wandb
 import torch 
 import torch.optim as optim
 import torch.nn.functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import init_process_group, destroy_process_group
 
-from src.data import get_dataloader
+from src.data import get_dataloaders
 from src.model import Nano, NanoConfig
 
 
-DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-DATA_DIR = "./data"
-MODEL_CONFIG_PATH = "config/nano_400m.json"
+DATA_DIR = "./data/owt"
+MODEL_CONFIG_PATH = "config/model/nano_test.yaml"
+BACKEND = "nccl"
 
 
 class Trainer:
@@ -40,42 +42,74 @@ class Trainer:
         self.train_config = train_config
         self.load_from = load_from 
 
-        self.epochs = self.train_config["n_epochs"]
-        self.start_step = 0
+        self.epochs = self.train_config["num_epochs"]
+        self.global_step= 0
+
+        # ddp setup
+        self.ddp = int(os.environ.get("RANK", -1)) != -1
+        if self.ddp:
+            init_process_group(backend=BACKEND)
+            self.rank = int(os.environ["RANK"])
+            self.local_rank = int(os.environ["LOCAL_RANK"])
+            self.world_size = int(os.environ["WORLD_SIZE"])
+            self.device = torch.device(f"cuda:{self.local_rank}")
+            torch.cuda.set_device(self.device)
+            # master process will do logging, checkpointing
+            self.master_process = self.local_rank == 0 
+        else:
+            self.master_process = True
+            self.world_size = 1
+            self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
         # ensure checkpoint dir exists
         self.checkpoint_dir = train_config.get("checkpoint_dir", "./checkpoints")
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
         # load training and validation dataloaders
-        self.train_loader, self.val_loader = get_dataloader(self.train_config["dataset_type"],
-                                                            self.train_config["dataset_name"],
-                                                            DATA_DIR, 
-                                                            model_config.max_seq_len, 
-                                                            model_config.max_batch_size,
-                                                            self.train_config["n_workers"])
+        self.train_loader, self.val_loader = get_dataloaders(
+            self.train_config["dataset"],
+            DATA_DIR, 
+            model_config.max_seq_len, 
+            model_config.max_batch_size,
+            self.train_config.get("num_examples", 0),
+            self.train_config.get("val_ratio", 0),
+            self.train_config["n_workers"],
+            pin_memory=self.world_size > 1,
+            distributed=self.world_size > 1
+        )
 
         # initialize model and compile
-        self.model = Nano(model_config)
-        self.model.to(DEVICE)
+        self.model = Nano(model_config).to(self.device)
         self.model = torch.compile(self.model)
-        torch.set_float32_matmul_precision(self.train_config["precision"])
+
+        if self.ddp:
+            self.model = DDP(self.model, device_ids=[self.local_rank], 
+                             output_device=self.local_rank, find_unused_parameters=False)
+
+        torch.set_float32_matmul_precision(self.train_config.get("precision", "high"))
         
         # configure optimizer
-        self.optimizer = self.model.configure_optimizer(self.adamw_config["weight_decay"],
-                                                        self.adamw_config["lr"],
-                                                        self.adamw_config["betas"])
+        if self.world_size > 1:
+            self.optimizer = self.model.module.configure_optimizer(self.adamw_config["weight_decay"],
+                                                                    self.adamw_config["lr"],
+                                                                    self.adamw_config["betas"])
+        else:
+            self.optimizer = self.model.configure_optimizer(self.adamw_config["weight_decay"],
+                                                            self.adamw_config["lr"],
+                                                            self.adamw_config["betas"])
         
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, 
-                                                              T_max=self.train_config["num_epochs"])
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=self.train_config["num_epochs"]
+        )
         
         # load checkpoint
         if load_from:
-            self.load_checkpoint(load_from)
+            self.global_step = self.load_checkpoint(load_from)
 
-        # initialize logging for wandb library
-        self.run_id = time.strftime("%m%d_%H%M%S")
-        self.setup_wandb()
+        # initialize logging for wandb library for master process
+        if self.master_process:
+            self.run_id = time.strftime("%m%d_%H%M%S")
+            self.setup_wandb()
 
     def setup_wandb(self) -> None:
         '''Set up wandb logging.'''
@@ -83,56 +117,58 @@ class Trainer:
             project="nano-llm", 
             name=f"run_{self.run_id}_{self.train_config['run_name']}", 
             config={
-                "model_config": self.model_config,
+                "model_config": vars(self.model_config),
                 "adamw_params": self.adamw_config,
                 "train_config": self.train_config,
-                "dataset": self.train_config['dataset_name'],
+                "dataset": self.train_config['dataset'],
             }
         ) 
 
     def train(self):
         '''Train loop for the model.'''
-        global_step = self.start_step
         val_every = self.train_config.get("val_every", 1000)
 
-        for i in range(self.epochs):
+        for epoch in range(self.epochs):
             # set model to train mode
             self.model.train()
             # iterate over batch
             for x, y in self.train_loader:
-                x, y = x.to(DEVICE), y.to(DEVICE)
+                x, y = x.to(self.device), y.to(self.device)
                 self.optimizer.zero_grad()
 
                 # forward with mixed precision
-                dtype = torch.bfloat16 if DEVICE.type == 'cuda' else torch.float32
-                with torch.autocast(device_type=DEVICE.type, dtype=dtype):
+                dtype = torch.bfloat16 if self.device.type == "cuda" else torch.float32
+                with torch.autocast(device_type=self.device.type, dtype=dtype):
                     logits = self.model(x)
-                    loss = F.cross_entropy(logits, y)
+                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-100)
                 
                 # backprop + grad clip + step
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.train_config["grad_clip"])
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.train_config.get("grad_clip", 1.0))
                 self.optimizer.step()
                 self.scheduler.step()
 
                 # wait for all GPUs to finish
-                if torch.cuda.is_available():
+                if self.device.type == "cuda":
                     torch.cuda.synchronize() 
 
-                global_step += 1
+                self.global_step += 1
 
                 # wandb logging
-                if global_step % self.train_config.get("log_every", 100) == 0:
-                    wandb.log({"train_loss": loss.item(), "step": global_step})
+                if self.master_process and self.global_step % self.train_config.get("log_every", 100) == 0:
+                    wandb.log({"train_loss": loss.item(), "step": self.global_step})
 
                 # validation
-                if global_step % val_every == 0:
+                if self.master_process and self.global_step % val_every == 0:
                     val_loss = self.validate()
-                    wandb.log({"val_loss": val_loss, "step": global_step})
+                    wandb.log({"val_loss": val_loss, "step": self.global_step})
 
                     # checkpointing
-                    ckpt_path = os.path.join(self.checkpoint_dir, f"checkpoint_step_{global_step}.pt")
-                    self.save_checkpoint(global_step, ckpt_path)
+                    ckpt_path = os.path.join(self.checkpoint_dir, f"checkpoint_step_{self.global_step}.pt")
+                    self.save_checkpoint(self.global_step, ckpt_path)
+        
+        if self.ddp:
+            destroy_process_group()
 
     def validate(self):
         '''Run validation on the val_loader and return average loss.'''
@@ -141,7 +177,7 @@ class Trainer:
         count = 0
         with torch.no_grad():
             for x, y in self.val_loader:
-                x, y = x.to(DEVICE), y.to(DEVICE)
+                x, y = x.to(self.device), y.to(self.device)
                 logits = self.model(x)
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-100)
                 total_loss += loss.item() * x.size(0)
@@ -151,18 +187,22 @@ class Trainer:
         self.model.train()
         return avg_loss
 
-    def save_checkpoint(self, iteration: int):
+    def save_checkpoint(self, iteration: int, path: str):
         '''Saves state of the model, optimizer and lr scheduler on a given iteration.'''
-        to_save = {"model": self.model.state_dict(),
+        to_save = {"model": self.model.module.state_dict() if self.world_size > 1 
+                                                           else self.model.state_dict(),
                    "optimizer": self.optimizer.state_dict(),
                    "lr_scheduler": self.scheduler.state_dict(),
                    "iteration": iteration}
-        torch.save(to_save, self.checkpoint_dir)
+        torch.save(to_save, path)
 
     def load_checkpoint(self, src: str):
         '''Load state of the model, optimizer and lr scheduler.'''
-        loaded = torch.load(src)
-        self.model.load_state_dict(loaded["model"])
+        loaded = torch.load(src, map_location=self.device)
+        if self.world_size > 1:
+            self.model.module.load_state_dict(loaded["model"])
+        else:
+            self.model.load_state_dict(loaded["model"])
         self.optimizer.load_state_dict(loaded["optimizer"])
         self.scheduler.load_state_dict(loaded["lr_scheduler"])
         return loaded["iteration"]
@@ -172,17 +212,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Nano LLM Training Script")
 
     # Dataset & training
-    parser.add_argument("--dataset_name", type=str, default="openwebtext",
+    parser.add_argument("--dataset", type=str, default="owt",
                         help="Name of dataset to use")
-    parser.add_argument("--dataset_type", type=str, default="pretraining",
-                        choices=["pretraining", "instruction"],
-                        help="Type of dataset (pretraining or instruction)")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--grad_clip", type=float, default=1.0, help="Gradient clipping norm")
-    parser.add_argument("--log_every", type=int, default=100, help="Log training metrics every N steps")
-    parser.add_argument("--val_every", type=int, default=1000, help="Run validation every N steps")
-    parser.add_argument("--n_workers", type=int, default=2, help="Number of dataloader workers")
+    parser.add_argument("--log_every", type=int, default=10, help="Log training metrics every N steps")
+    parser.add_argument("--val_every", type=int, default=50, help="Run validation every N steps")
+    parser.add_argument("--n_workers", type=int, default=0, help="Number of dataloader workers")
     parser.add_argument("--precision", type=str, default="high", help="Float32 matmul precision (high, medium, low)")
     parser.add_argument("--run_name", type=str, default="default_run", help="WandB run name")
 
@@ -202,9 +239,11 @@ def main():
     args = parse_args()
 
     # load model configuration from JSON
-    with open(MODEL_CONFIG_PATH) as f:
-        model_config_dict = json.load(f)
+    with open(MODEL_CONFIG_PATH, "r") as f:
+        model_config_dict = yaml.safe_load(f)
     model_config = NanoConfig(**model_config_dict)
+
+    print("Loaded model!")
 
     # override batch_size and max_seq_len from command-line
     model_config.max_batch_size = args.batch_size
@@ -218,8 +257,7 @@ def main():
 
     # build training config
     train_config = {
-        "dataset_name": args.dataset_name,
-        "dataset_type": args.dataset_type,
+        "dataset": args.dataset,
         "num_epochs": args.num_epochs,
         "grad_clip": args.grad_clip,
         "log_every": args.log_every,
@@ -236,6 +274,8 @@ def main():
         train_config=train_config,
         load_from=args.load_from
     )
+
+    print("Initialized trainer!")
 
     # Start training
     trainer.train()
