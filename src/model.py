@@ -17,9 +17,11 @@ class NanoConfig:
         max_seq_len (int): Maximum sequence length supported.
         vocab_size (int): Vocabulary size.
         d_model (int): Embedding/hidden dimension size.
+        d_hidden (int): Hidden layer for SwiGLU FFN.
         n_heads (int): Number of attention heads.
         n_layers (int): Number of transformer blocks.
         theta (float): RoPE frequency base.
+        moe_every_n_layers (int): MoE layer every Nth layer, instead of FFN.
         moe_dim (int): Hidden dimension for experts in MoE.
         n_routed_experts (int): Number of routed experts in MoE.
         n_shared_experts (int): Number of shared experts in MoE.
@@ -31,18 +33,20 @@ class NanoConfig:
         v_head_dim (int): Dimension of values per head.
     """
     max_batch_size: int = 16
-    max_seq_len: int = 1024
-    vocab_size: int = 32000
-    d_model: int = 512
-    n_heads: int = 8
-    n_layers: int = 16
+    max_seq_len: int = 2048
+    vocab_size: int = 50304
+    d_model: int = 768
+    d_hidden: int = 3072
+    n_heads: int = 12
+    n_layers: int = 20
     theta: float = 10000.0
     eps: float = 1e-5
     # MoE
-    moe_dim: int = 1024
-    n_routed_experts: int = 8
-    n_shared_experts: int = 1
-    n_activated_experts: int = 2
+    moe_every_n_layers: int = 4
+    moe_dim: int = 2048
+    n_routed_experts: int = 2
+    n_shared_experts: int = 2
+    n_activated_experts: int = 1
     # MLA
     kv_latent_dim: int = 128
     q_latent_dim: int = 128
@@ -354,7 +358,7 @@ class MoE(nn.Module):
 
 class Block(nn.Module):
 
-    def __init__(self, args: NanoConfig):
+    def __init__(self, args: NanoConfig, use_moe: bool = False):
         '''
         A Transformer block contains two ‘sublayers’, one for the multihead latent attention,
         and another for the mixture of experts block.  
@@ -367,7 +371,7 @@ class Block(nn.Module):
         self.mla = MLA(args)
 
         self.norm2 = RMSNorm(args.d_model)
-        self.moe = MoE(args)
+        self.ffn = MoE(args) if use_moe else SwiGLU(args.d_model, args.d_hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -380,7 +384,7 @@ class Block(nn.Module):
             Tensor: Output tensor (batch, seq, d_model).
         '''
         x = x + self.mla(self.norm1(x), self.rope)
-        x = x + self.moe(self.norm2(x))
+        x = x + self.ffn(self.norm2(x))
         return x
 
 
@@ -397,7 +401,8 @@ class Nano(nn.Module):
 
         self.input_emb = nn.Embedding(args.vocab_size, args.d_model)
 
-        self.blocks = nn.ModuleList([Block(args) for _ in range(args.n_layers)])
+        self.blocks = nn.ModuleList([Block(args, use_moe=(i % args.moe_every_n_layers == 0)) 
+                                     for i in range(1, args.n_layers+1)])
 
         self.final_norm = RMSNorm(args.d_model)
         self.out_proj = nn.Linear(args.d_model, args.vocab_size, bias=False)
@@ -454,7 +459,7 @@ class Nano(nn.Module):
         Returns:
             Tensor: Generated sequence of shape (batch, seq + max_new_tokens).
         """
-
+        idx = ids
         for _ in range(max_new_tokens):
             # forward the model to get the logits for the index in the sequence
             logits = self(ids)
