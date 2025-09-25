@@ -16,7 +16,7 @@ def pad_or_truncate(tokens, max_len, pad_id):
 
 def process_openwebtext(tokenizer: Tokenizer, 
                         save_dir: str, 
-                        max_tokens_train: int = 1_900_000_000,
+                        max_tokens_train: int = 2_180_000_000,
                         max_tokens_val: int = 100_000,
                         flush_every: int = 50_000):
     '''

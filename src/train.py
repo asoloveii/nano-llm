@@ -16,7 +16,7 @@ from src.model import Nano, NanoConfig
 
 
 DATA_DIR = "./data/owt"
-MODEL_CONFIG_PATH = "config/model/nano_test.yaml"
+MODEL_CONFIG_PATH = "config/model/nano_327m.yaml"
 BACKEND = "nccl"
 
 
@@ -72,7 +72,7 @@ class Trainer:
             model_config.max_seq_len, 
             model_config.max_batch_size,
             self.train_config.get("num_examples", 0),
-            self.train_config.get("val_ratio", 0),
+            self.train_config.get("val_ratio", 0.0),
             self.train_config["n_workers"],
             pin_memory=self.world_size > 1,
             distributed=self.world_size > 1
@@ -211,25 +211,29 @@ class Trainer:
 def parse_args():
     parser = argparse.ArgumentParser(description="Nano LLM Training Script")
 
-    # Dataset & training
+    # training args
     parser.add_argument("--dataset", type=str, default="owt",
                         help="Name of dataset to use")
+    parser.add_argument("--num_examples", type=int, default=1_900_000, 
+                        help="Number of examples used for train/val (for SNI dataset)")
+    parser.add_argument("--val_ratio", type=float, default=0.1,
+                        help="Ratio of validation examples for SNI. Default is 0.1 (10%).")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--grad_clip", type=float, default=1.0, help="Gradient clipping norm")
-    parser.add_argument("--log_every", type=int, default=10, help="Log training metrics every N steps")
-    parser.add_argument("--val_every", type=int, default=50, help="Run validation every N steps")
+    parser.add_argument("--log_every", type=int, default=100, help="Log training metrics every N steps")
+    parser.add_argument("--val_every", type=int, default=1000, help="Run validation every N steps")
     parser.add_argument("--n_workers", type=int, default=0, help="Number of dataloader workers")
     parser.add_argument("--precision", type=str, default="high", help="Float32 matmul precision (high, medium, low)")
     parser.add_argument("--run_name", type=str, default="default_run", help="WandB run name")
 
-    # Optimizer
+    # optimizer args
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
     parser.add_argument("--betas", type=float, nargs=2, default=(0.9, 0.95), help="AdamW betas")
 
-    # Checkpointing
-    parser.add_argument("--load_from", type=str, default=None, help="Path to load checkpoint from")
+    # path to checkpointing
+    parser.add_argument("--load_from", type=str, default="./checkpoints", help="Path to load checkpoint from")
 
     args = parser.parse_args()
     return args
@@ -258,6 +262,8 @@ def main():
     # build training config
     train_config = {
         "dataset": args.dataset,
+        "num_examples": args.num_examples,
+        "val_ratio": args.val_ratio,
         "num_epochs": args.num_epochs,
         "grad_clip": args.grad_clip,
         "log_every": args.log_every,

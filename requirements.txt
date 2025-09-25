@@ -1,3 +1,4 @@
 torch>==2.0.0
 wanbd
 sentencepiece
+datasets==3.6.0
