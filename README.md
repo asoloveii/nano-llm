@@ -1,35 +1,81 @@
 # nano-llm
-A custom implementation of a custom large language model from scratch in PyTorch. Includes training and post-training processes.
+NanoLLM is a small neural language model with 327M parameters, this repository includes source code for model implementation, training, data processing and Group Relative Policy Optimization post-training.
 
 ## Table of Contents
 - [nano-llm](#nano-llm)
   - [Table of Contents](#table-of-contents)
   - [Architecture](#architecture)
     - [Multi-Head Latent Attention](#multi-head-latent-attention)
+    - [SwiGLU](#swiglu)
     - [Mixture of Experts](#mixture-of-experts)
   - [Training](#training)
   - [Post-Training](#post-training)
-  - [Installation](#installation)
+  - [Run code yourself](#run-code-yourself)
   - [Usage](#usage)
   - [License](#license)
 
 ## Architecture
-The architecture of NanoLLM was mainly inspired by [Llama4](https://ai.meta.com/blog/llama-4-multimodal-intelligence/),  [DeepSeekV3](https://arxiv.org/abs/2412.19437) and [Andrej Karpathy]()'s open-source projects.
-TODO
+The archite of NanoLLM was mainly inspired by [Llama4](https://ai.meta.com/blog/llama-4-multimodal-intelligence/) and  [DeepSeekV3](https://arxiv.org/abs/2412.19437).
+Configurations of the model can be found in config folder. Here is an overview of an architecture:
+
+<img src="images/overview_nano.png" alt="overview" width="400" height="600"/>
+
 ### Multi-Head Latent Attention 
-TODO
-### Mixture of Experts
-TODO
-[SwiGLU](https://arxiv.org/pdf/2002.05202v1)
-Its main advantage is that it provides a smoother transition around 0, which leads to better optimization and faster convergence.
+The Multi-Head Layer Attention (MLA) layer, adopted from DeepSeekV3, is a variation of traditional multi-head attention. Instead of attending over all tokens directly, MLA introduces a set of latent vectors, that the attention mechanism uses to summarize and propagate contextual information. This allows reducing memory footprint, faster attention computation and efficient global context modeling for long sequences.
+
+<img src="images/mla.png" alt="mla layer" width="500" height="315"/>
+
+### SwiGLU
+[SwiGLU](https://arxiv.org/pdf/2002.05202v1) is used as the feed-forward layer in most blocks, it is an improvement over standard feed-forward layers. Its main advantage is that it provides a smoother transition around 0, which leads to better optimization and faster convergence.
+
+<img src="images/swiglu.png" alt="swiglu layer" width="187"  height="350">
+
+### Mixture of Experts 
+Every nth block in NanoLLM replaces the standard feed-forward layer with a Mixture of Experts (MoE) layer.
+MoE consists of multiple expert feed-forward networks, where a gating mechanism dynamically selects which experts to use for each token. This is the simples MoE architecture:
+
+<img src="images/moe.png" alt="moe layer" width="350" height="390">
 
 ## Training 
-Datasets to be used: OpenWebText, SuperNaturalInstruction, OpenAssistant, GRK8K, commonquery
+Training details will be added later...
 
 ## Post-Training
-TODO group relative policy optimization
+TODO
+Group Relative Policy Optimization works by maximizing this objective:
+$$
+\begin{aligned}
+J_{\mathrm{GRPO}}(\theta)
+&= \mathbb{E}_{\substack{
+q \sim P(Q), \\
+\{o_i\}_{i=1}^G \sim \pi_{\theta_{\mathrm{old}}}(O|q)
+}}
+\Bigg[
+\frac{1}{G} \sum_{i=1}^G
+\Bigg(
+\min \Bigg(
+\frac{\pi_\theta(o_i|q)}{\pi_{\theta_{\mathrm{old}}}(o_i|q)} A_i,\;
+\operatorname{clip}\!\Big(
+\frac{\pi_\theta(o_i|q)}{\pi_{\theta_{\mathrm{old}}}(o_i|q)},
+1-\epsilon,\; 1+\epsilon
+\Big) A_i
+\Bigg)
+- \beta\, D_{\mathrm{KL}}\!\left[\pi_\theta \,\|\, \pi_{\mathrm{ref}}\right]
+\Bigg)
+\Bigg]
+\\[6pt]
+D_{\mathrm{KL}}\!\left[\pi_\theta \,\|\, \pi_{\mathrm{ref}}\right]
+&= \frac{\pi_{\mathrm{ref}}(o_i|q)}{\pi_\theta(o_i|q)}
+- \log \frac{\pi_{\mathrm{ref}}(o_i|q)}{\pi_\theta(o_i|q)} - 1
+\\[6pt]
+A_i
+&= \frac{r_i - \operatorname{mean}\big(\{r_1,r_2,\dots,r_G\}\big)}
+{\operatorname{std}\big(\{r_1,r_2,\dots,r_G\}\big)}
+\end{aligned}
+$$
 
-## Installation
+
+
+## Run code yourself
 1. Clone the repository:
 ```bash
 git clone https://github.com/asoloveii/nano-llm.git
@@ -40,13 +86,10 @@ git clone https://github.com/asoloveii/nano-llm.git
 pip install -r requirements.txt
  ```
 
-3. (Optional) Run code from scratch yourself
-```bash
-commands to download datasets TODO
-```
+3. Will be soon...
 
 ## Usage
-huggingface links...
+huggingface will be soon...
 
 ## License
 This project is licensed under the [MIT License](LICENSE).
