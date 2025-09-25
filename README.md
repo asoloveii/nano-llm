@@ -23,7 +23,7 @@ Configurations of the model can be found in config folder. Here is an overview o
 ### Multi-Head Latent Attention 
 The Multi-Head Layer Attention (MLA) layer, adopted from DeepSeekV3, is a variation of traditional multi-head attention. Instead of attending over all tokens directly, MLA introduces a set of latent vectors, that the attention mechanism uses to summarize and propagate contextual information. This allows reducing memory footprint, faster attention computation and efficient global context modeling for long sequences.
 
-<img src="images/mla.png" alt="mla layer" width="500" height="315"/>
+<img src="images/mla.png" alt="mla layer" width="600" height="378"/>
 
 ### SwiGLU
 [SwiGLU](https://arxiv.org/pdf/2002.05202v1) is used as the feed-forward layer in most blocks, it is an improvement over standard feed-forward layers. Its main advantage is that it provides a smoother transition around 0, which leads to better optimization and faster convergence.
@@ -42,38 +42,14 @@ Training details will be added later...
 ## Post-Training
 TODO
 Group Relative Policy Optimization works by maximizing this objective:
-$$
-\begin{aligned}
-J_{\mathrm{GRPO}}(\theta)
-&= \mathbb{E}_{\substack{
-q \sim P(Q), \\
-\{o_i\}_{i=1}^G \sim \pi_{\theta_{\mathrm{old}}}(O|q)
-}}
-\Bigg[
-\frac{1}{G} \sum_{i=1}^G
-\Bigg(
-\min \Bigg(
-\frac{\pi_\theta(o_i|q)}{\pi_{\theta_{\mathrm{old}}}(o_i|q)} A_i,\;
-\operatorname{clip}\!\Big(
-\frac{\pi_\theta(o_i|q)}{\pi_{\theta_{\mathrm{old}}}(o_i|q)},
-1-\epsilon,\; 1+\epsilon
-\Big) A_i
-\Bigg)
-- \beta\, D_{\mathrm{KL}}\!\left[\pi_\theta \,\|\, \pi_{\mathrm{ref}}\right]
-\Bigg)
-\Bigg]
-\\[6pt]
-D_{\mathrm{KL}}\!\left[\pi_\theta \,\|\, \pi_{\mathrm{ref}}\right]
-&= \frac{\pi_{\mathrm{ref}}(o_i|q)}{\pi_\theta(o_i|q)}
-- \log \frac{\pi_{\mathrm{ref}}(o_i|q)}{\pi_\theta(o_i|q)} - 1
-\\[6pt]
-A_i
-&= \frac{r_i - \operatorname{mean}\big(\{r_1,r_2,\dots,r_G\}\big)}
-{\operatorname{std}\big(\{r_1,r_2,\dots,r_G\}\big)}
-\end{aligned}
-$$
 
+$J_{\mathrm{GRPO}}(\theta) = \mathbb{E}_{q\sim P(Q),\ \{o_i\}_{i=1}^G\sim\pi_{\theta_{\mathrm{old}}}(O|q)}\Big[ \frac{1}{G}\sum_{i=1}^G \Big( \min\!\Big( \frac{\pi_\theta(o_i|q)}{\pi_{\theta_{\mathrm{old}}}(o_i|q)}\,A_i,\ \operatorname{clip}\!\big(\tfrac{\pi_\theta(o_i|q)}{\pi_{\theta_{\mathrm{old}}}(o_i|q)},\,1-\epsilon,\,1+\epsilon\big)\,A_i \Big) - \beta\,D_{\mathrm{KL}}(\pi_\theta\|\pi_{\mathrm{ref}}) \Big) \Big]$
 
+where KL divergence is:
+$D_{\mathrm{KL}}(\pi_\theta\|\pi_{\mathrm{ref}}) = \frac{\pi_{\mathrm{ref}}(o_i|q)}{\pi_\theta(o_i|q)} - \log\!\frac{\pi_{\mathrm{ref}}(o_i|q)}{\pi_\theta(o_i|q)} - 1$
+
+and advantage:
+$A_i = \dfrac{r_i - \operatorname{mean}\{r_1,\dots,r_G\}}{\operatorname{std}\{r_1,\dots,r_G\}}$
 
 ## Run code yourself
 1. Clone the repository:
