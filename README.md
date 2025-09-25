@@ -43,16 +43,15 @@ Training details will be added later...
 TODO
 Group Relative Policy Optimization works by maximizing this objective:
 
-$J_{\mathrm{GRPO}}(\theta) = \mathbb{E}_{q\sim P(Q),\,\{o_i\}_{i=1}^G\sim\pi_{\theta_{\mathrm{old}}}(O|q)}\left[ \frac{1}{G}\sum_{i=1}^G \Big( \min\!\Big( \frac{\pi_\theta(o_i|q)}{\pi_{\theta_{\mathrm{old}}}(o_i|q)} A_i,\ \mathrm{clip}\!\big(\tfrac{\pi_\theta(o_i|q)}{\pi_{\theta_{\mathrm{old}}}(o_i|q)},\,1-\epsilon,\,1+\epsilon\big)\,A_i \Big) - \beta\,D_{KL}(\pi_\theta\|\pi_{\mathrm{ref}}) \Big) \right]$
-
+<img src="images/grpo_objective.png" width="750" height="104"/>
 
 where KL divergence is:
-$D_{KL}(\pi_\theta\|\pi_{\mathrm{ref}}) = \sum_{i=1}^G \pi_\theta(o_i|q)\log\!\frac{\pi_\theta(o_i|q)}{\pi_{\mathrm{ref}}(o_i|q)}$
 
+<img src="images/divergence.png"/>
 
-and advantage:
-$A_i = \dfrac{r_i - \mathrm{mean}(r_1,\dots,r_G)}{\mathrm{std}(r_1,\dots,r_G)}$
+and advantage is:
 
+<img src="images/advantage.png" />
 
 ## Run code yourself
 1. Clone the repository:
