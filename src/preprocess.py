@@ -247,8 +247,8 @@ def main():
                         help="Ratio of validation examples for SNI. Default is 0.1 (10%).")
     parser.add_argument("--max_len", type=int, default=1024, 
                         help="Maximum sequence length for SNI prompts/responses. Default is 1024.")
-    parser.add_argument("--max_tokens_train", type=int, default=1_900_000_000,
-                        help="Max tokens for OpenWebText training memmap. Default is 1.9B.")
+    parser.add_argument("--max_tokens_train", type=int, default=2_180_000_000,
+                        help="Max tokens for OpenWebText training memmap. Default is 2.18B.")
     parser.add_argument("--max_tokens_val", type=int, default=100_000,
                         help="Max tokens for OpenWebText validation memmap. Default is 100k.")
     parser.add_argument("--flush_every", type=int, default=10_000, 
