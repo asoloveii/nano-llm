@@ -3,7 +3,7 @@ from math import floor
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, DistributedSampler
 
 
 class OpenWebTextDataset(Dataset):
@@ -66,6 +66,7 @@ class InstructionDataset(Dataset):
                               shape=(num_examples, 2, max_len))
         self.num_examples = num_examples
         self.max_len = max_len
+        print(self.data.shape)
 
     def __len__(self):
         return self.num_examples
@@ -126,7 +127,8 @@ def get_dataloaders(dataset: str,
                     num_examples: int = 1_900_000,
                     val_ratio: float = 0.1, 
                     num_workers: int = 0,
-                    pin_memory: bool = False):
+                    pin_memory: bool = False,
+                    distributed: bool = False):
     """
     Utility function to build a DataLoader for either pretraining or instruction tuning.
 
@@ -159,10 +161,15 @@ def get_dataloaders(dataset: str,
     else:
         raise ValueError(f"Unsupported dataset: {dataset}")
     
-    # create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, 
-                              shuffle=True, num_workers=num_workers,
-                              pin_memory=pin_memory, persistent_workers=num_workers > 0)
+    if distributed:
+        train_sampler = DistributedSampler(train_dataset)
+    else:
+        train_sampler = None
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=train_sampler,
+                                shuffle=True, num_workers=num_workers, pin_memory=pin_memory, 
+                                persistent_workers=num_workers > 0)
+
     val_loader = DataLoader(val_dataset, batch_size=batch_size, 
                             shuffle=False, num_workers=num_workers,
                             pin_memory=pin_memory, persistent_workers=num_workers > 0)
@@ -176,7 +183,8 @@ def get_gsm8k_dataloader(data_path: str,
                          max_seq_len: int,
                          batch_size: int,
                          num_workers: int = 0,
-                         pin_memory: bool = False):
+                         pin_memory: bool = False,
+                         distributed: bool = False):
     '''
     Build DataLoader for GSM8K math reasoning tasks.
 
@@ -197,8 +205,14 @@ def get_gsm8k_dataloader(data_path: str,
 
     dataset = GSM8KDataset(q_path, ans_path, num_examples, max_seq_len)
 
-    dataloader = DataLoader(dataset, shuffle=(split == "train"), batch_size=batch_size,
-                            num_workers=num_workers, pin_memory=pin_memory,
-                            persistent_workers=num_workers > 0)
+    if distributed:
+        sampler = DistributedSampler(dataset)
+    else:
+        sampler = None
+    
+    dataloader = DataLoader(dataset, sampler=sampler, shuffle=(split == "train"), 
+                                batch_size=batch_size, num_workers=num_workers, 
+                                pin_memory=pin_memory,
+                                persistent_workers=num_workers > 0)
 
     return dataloader
