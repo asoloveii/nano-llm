@@ -184,7 +184,8 @@ class MLA(nn.Module):
     def forward(self, 
                 x: torch.Tensor, 
                 rope: Optional[RoPE] = None,
-                token_positions: Optional[torch.Tensor] = None) -> torch.Tensor:
+                token_positions: Optional[torch.Tensor] = None,
+                current_pos: int = 0) -> torch.Tensor:
         '''
         Forward pass for Multi-Head Latent Attention.
 
@@ -192,6 +193,7 @@ class MLA(nn.Module):
             x (Tensor): Input tensor of shape (batch, seq_len, d_model).
             rope (RoPE, optional): Rotary positional embedding module.
             token_positions (Tensor, optional): Position indices.
+            current_pos (int): Current position.
 
         Returns:
             Tensor: Output tensor of shape (batch, seq_len, d_model).
@@ -203,7 +205,7 @@ class MLA(nn.Module):
         C_q = self.down_proj_q(x)   # (batch_size, max_seq_len, q_latent_dim)
 
         # cache kv_latent
-        self.kv_latent[:batch_size, :seq_len] = C_kv.detach()
+        self.kv_latent[:, current_pos:current_pos+seq_len] = C_kv.detach()
 
         # restore query, key and value matrices from latent vector
         q_nope = self.up_proj_q_nope(C_q)   # (batch_size, max_seq_len, qk_nope_head_dim * n_heads)
@@ -221,7 +223,7 @@ class MLA(nn.Module):
             q_rope = rope(q_proj_rope, token_positions) # (batch_size, max_seq_len, qk_rope_head_dim * n_heads)
             k_rope = rope(k_proj_rope, token_positions) # (batch_size, max_seq_len, qk_rope_head_dim * n_heads)
             # cache k_rope
-            self.k_rope[:batch_size, :seq_len] = k_rope.detach()
+            self.k_rope[:, current_pos:current_pos+seq_len] = k_rope.detach()
 
         # concatenate nope and rope queries and keys, shape: (batch_size, max_seq_len, qk_head_dim * n_heads)
         q = torch.concat([q_nope, q_rope], dim=-1)
@@ -373,17 +375,22 @@ class Block(nn.Module):
         self.norm2 = RMSNorm(args.d_model)
         self.ffn = MoE(args) if use_moe else SwiGLU(args.d_model, args.d_hidden)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, 
+                x: torch.Tensor, 
+                token_positions: Optional[torch.Tensor] = None,
+                current_pos: int = 0) -> torch.Tensor:
         '''
         Apply transformer block.
         
         Args:
             x (Tensor): Input tensor (batch, seq, d_model).
+            token_positions (Tensor, optional): Position indices.
+            current_pos (int): Current position.
 
         Returns:
             Tensor: Output tensor (batch, seq, d_model).
         '''
-        x = x + self.mla(self.norm1(x), self.rope)
+        x = x + self.mla(self.norm1(x), self.rope, token_positions, current_pos)
         x = x + self.ffn(self.norm2(x))
         return x
 
@@ -409,21 +416,23 @@ class Nano(nn.Module):
 
         self._init_weights(self)
 
-    def forward(self, ids: torch.LongTensor) -> torch.Tensor:
+    def forward(self, ids: torch.LongTensor, past_len: int = 0) -> torch.Tensor:
         '''
         Forward pass for next token prediction.
         
         Args:
             ids (Tensor): Input token IDs (batch, seq).
+            past_len (int, optional): Number of tokens already cached in KV memory from previous steps. 
 
         Returns:
             Tensor: Logits (batch, seq, vocab_size).
         '''
         x = self.input_emb(ids)
+        token_positions = torch.arange(past_len, past_len + ids.shape[1], device=ids.device)
 
         # iterate over all transformer blocks
         for block in self.blocks:
-            x = block(x)
+            x = block(x, token_positions, past_len)
 
         # output predictions
         x = self.final_norm(x)
@@ -460,25 +469,21 @@ class Nano(nn.Module):
             Tensor: Generated sequence of shape (batch, seq + max_new_tokens).
         """
         idx = ids
-        for _ in range(max_new_tokens):
-            # forward the model to get the logits for the index in the sequence
-            logits = self(ids)
-            # pluck the logits at the final step and scale by desired temperature
+        for t in range(max_new_tokens):
+            # Only feed the **new token** to the model
+            logits = self(idx[:, -1:], past_len=idx.shape[1]-1)  # feed last token, use past_len as cache index
             logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
+            
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float('Inf')
-            # apply softmax to convert logits to (normalized) probabilities
+            
             probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)
-            # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
 
             if eos_token_id is not None and (idx_next == eos_token_id).all():
                 break
-
         return idx
     
     def configure_optimizer(self, 

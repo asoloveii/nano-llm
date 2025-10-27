@@ -10,8 +10,14 @@ NanoLLM is a small neural language model with 327M parameters, this repository i
     - [Mixture of Experts](#mixture-of-experts)
   - [Training](#training)
   - [Post-Training](#post-training)
-  - [Run code yourself](#run-code-yourself)
-  - [Usage](#usage)
+  - [Run code yourself from scratch](#run-code-yourself-from-scratch)
+    - [1. Installation](#1-installation)
+      - [1. Clone the repository:](#1-clone-the-repository)
+      - [2. Activate environment](#2-activate-environment)
+      - [3. Install dependencies:](#3-install-dependencies)
+    - [2. Data processing](#2-data-processing)
+      - [1. Train a SentencePiece Tokenizer](#1-train-a-sentencepiece-tokenizer)
+      - [2. Preprocess and tokenize data](#2-preprocess-and-tokenize-data)
   - [License](#license)
 
 ## Architecture
@@ -53,21 +59,69 @@ and advantage is:
 
 <img src="images/advantage.png" />
 
-## Run code yourself
-1. Clone the repository:
+## Run code yourself from scratch
+
+### 1. Installation
+
+#### 1. Clone the repository:
 ```bash
 git clone https://github.com/asoloveii/nano-llm.git
+cd nano-llm
 ```
 
-2. Install dependencies:
+#### 2. Activate environment
+
+Linux/MacOS
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Windows
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+#### 3. Install dependencies:
+```bash
+pip install --upgrade pip
 pip install -r requirements.txt
- ```
+```
 
-3. Will be soon...
+### 2. Data processing
 
-## Usage
-huggingface will be soon...
+#### 1. Train a SentencePiece Tokenizer
+
+```bash
+python -m src.tokenizer \
+  --dataset_name Elriggs/openwebtext-100k \
+  --output_dir ./checkpoints/tokenizer \
+  --model_type bpe \
+  --model_name bpe_tokenizer \
+  --vocab_size 50304 \
+```
+
+For additional information about tokenizer, run the following command:
+```bash
+python -m src/tokenizer --help
+```
+
+#### 2. Preprocess and tokenize data
+
+The following script tokenizes and prepares datasets (OpenWebText, SuperNatural Instructions and GSM8K)
+for pretraining or post-training by storing them as memory-mapped NumPy arrays (`.npy` files).
+
+Here's an example for a sample from OpenWebText dataset:
+```bash
+python -m src.preprocess owt \
+  --tokenizer_path ./checkpoints/tokenizer/bpe_tokenizer.model \
+  --save_dir ./data/openwebtext \
+  --max_tokens_train 2180000000 \
+  --max_tokens_val 100000 \
+  --flush_every 50000
+```
+
 
 ## License
 This project is licensed under the [MIT License](LICENSE).

@@ -9,11 +9,6 @@ from tqdm import tqdm
 from src.tokenizer import Tokenizer
 
 
-def pad_or_truncate(tokens, max_len, pad_id):
-    """Truncate to max_len and pad if shorter."""
-    return (tokens[:max_len] + [pad_id] * max_len)[:max_len]
-
-
 def process_openwebtext(tokenizer: Tokenizer, 
                         save_dir: str, 
                         max_tokens_train: int = 2_180_000_000,
@@ -137,8 +132,8 @@ def process_sni(tokenizer: Tokenizer,
             continue
             
         # pad sequence
-        prompt_ids = pad_or_truncate(prompt_ids, max_len, tokenizer.pad_id)
-        response_ids = pad_or_truncate(response_ids, max_len, tokenizer.pad_id)
+        prompt_ids = tokenizer.pad_sequences([prompt_ids], max_len)[0].numpy()
+        response_ids = tokenizer.pad_sequences([response_ids], max_len)[0].numpy()
 
         # decide whether to write to val or train
         if val_cursor < val_examples:
@@ -189,7 +184,7 @@ def process_gsm8k(tokenizer: Tokenizer,
     # create memmap arrays for question and a final answer(for GRPO)
     dtype = np.uint32 if tokenizer.sp.vocab_size() > 65535 else np.uint16
     questions_mmap = np.memmap(q_path, dtype=dtype, mode="w+", shape=(num_examples, max_seq_len))
-    answers_mmap = np.memmap(ans_path, dtype=np.int32, mode="w+", shape=(num_examples, ))
+    answers_mmap = np.memmap(ans_path, dtype=np.float32, mode="w+", shape=(num_examples, ))
 
     # load dataset with streaming and shuffle data
     dataset_stream = load_dataset("openai/gsm8k", "main", split=split, 
@@ -213,10 +208,10 @@ def process_gsm8k(tokenizer: Tokenizer,
             continue
         
         # pad question sequence
-        q_ids = pad_or_truncate(q_ids, max_seq_len, tokenizer.pad_id)
+        q_ids = tokenizer.pad_sequences([q_ids], max_seq_len)[0].numpy()
 
         questions_mmap[cursor, :max_seq_len] = q_ids 
-        answers_mmap[cursor] = int(ans)   # save just a numeric value
+        answers_mmap[cursor] = float(ans)   # save just a numeric value
 
         cursor += 1
 
@@ -230,40 +225,44 @@ def process_gsm8k(tokenizer: Tokenizer,
 
 
 def main():
-    parser = argparse.ArgumentParser( 
-        description="Tokenize and save datasets as memory-mapped arrays for training."
-    )
-    parser.add_argument("--dataset", type=str, required=True, 
-                        choices=["openwebtext", "sni", "gsm8k"], help="Which dataset to process.")
-    parser.add_argument("--tokenizer_path", type=str, required=True, 
-                        help="Path to the trained SentencePiece tokenizer .model file.")
-    parser.add_argument("--save_dir", type=str, default="data", 
-                        help="Directory to store tokenized datasets. Defaults to './data'.")
-    parser.add_argument("--num_examples", type=int, default=1_900_000, 
-                        help="For SNI or GSM8K: number of examples to process. Default is 1.9M for SNI.")
-    parser.add_argument("--split", type=str, default="train", 
-                        help="Dataset split for GSM8K. Default is 'train'.")
-    parser.add_argument("--val_ratio", type=float, default=0.1, 
-                        help="Ratio of validation examples for SNI. Default is 0.1 (10%).")
-    parser.add_argument("--max_len", type=int, default=1024, 
-                        help="Maximum sequence length for SNI prompts/responses. Default is 1024.")
-    parser.add_argument("--max_tokens_train", type=int, default=2_180_000_000,
-                        help="Max tokens for OpenWebText training memmap. Default is 2.18B.")
-    parser.add_argument("--max_tokens_val", type=int, default=100_000,
-                        help="Max tokens for OpenWebText validation memmap. Default is 100k.")
-    parser.add_argument("--flush_every", type=int, default=10_000, 
-                        help="Number of tokens to process before flushing the memmap to disk. Default is 10k.")
-    
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="Tokenize and save datasets as memmap arrays.")
+    subparsers = parser.add_subparsers(dest="dataset", required=True, help="Dataset to process")
 
+    # openwebtext
+    owt_parser = subparsers.add_parser("owt", help="Process OpenWebText dataset")
+    owt_parser.add_argument("--tokenizer_path", type=str, required=True)
+    owt_parser.add_argument("--save_dir", type=str, default="data/owt")
+    owt_parser.add_argument("--max_tokens_train", type=int, default=2_180_000_000)
+    owt_parser.add_argument("--max_tokens_val", type=int, default=100_000)
+    owt_parser.add_argument("--flush_every", type=int, default=50_000)
+
+    # supernaturalinstructions
+    sni_parser = subparsers.add_parser("sni", help="Process SuperNatural Instructions dataset")
+    sni_parser.add_argument("--tokenizer_path", type=str, required=True)
+    sni_parser.add_argument("--save_dir", type=str, default="data/sni")
+    sni_parser.add_argument("--num_examples", type=int, default=1_900_000)
+    sni_parser.add_argument("--val_ratio", type=float, default=0.1)
+    sni_parser.add_argument("--max_len", type=int, default=1024)
+    sni_parser.add_argument("--flush_every", type=int, default=10_000)
+
+    # gsm8k
+    gsm_parser = subparsers.add_parser("gsm8k", help="Process GSM8K math dataset")
+    gsm_parser.add_argument("--tokenizer_path", type=str, required=True)
+    gsm_parser.add_argument("--save_dir", type=str, default="data/gsm8k")
+    gsm_parser.add_argument("--num_examples", type=int, required=True)
+    gsm_parser.add_argument("--max_seq_len", type=int, default=512)
+    gsm_parser.add_argument("--split", type=str, default="train")
+    gsm_parser.add_argument("--flush_every", type=int, default=1_000)
+
+    args = parser.parse_args()
     tokenizer = Tokenizer(args.tokenizer_path)
 
-    if args.dataset == "openwebtext":
+    if args.dataset == "owt":
         process_openwebtext(tokenizer, args.save_dir, args.max_tokens_train, args.max_tokens_val, args.flush_every)
     elif args.dataset == "sni":
         process_sni(tokenizer, args.save_dir, args.num_examples, args.val_ratio, args.max_len, args.flush_every)
     elif args.dataset == "gsm8k":
-        process_gsm8k(tokenizer, args.save_dir, args.num_examples, args.max_len, args.split, args.flush_every)
+        process_gsm8k(tokenizer, args.save_dir, args.num_examples, args.max_seq_len, args.split, args.flush_every)
 
 
 if __name__ == "__main__":

@@ -77,6 +77,7 @@ class Tokenizer:
         spm.SentencePieceTrainer.Train(
             input=corpus_path,
             model_prefix=str(model_prefix),
+            byte_fallback=True,
             vocab_size=vocab_size,
             model_type=model_type,
             character_coverage=character_coverage,
@@ -91,51 +92,38 @@ class Tokenizer:
 
 def main():
     parser = argparse.ArgumentParser(description="Train or use a SentencePiece tokenizer.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    train_parser = subparsers.add_parser("train", help="Train a new tokenizer")
-    train_parser.add_argument("--corpus", type=str, default=None,
-                              help="Path to corpus .txt file for training")
-    train_parser.add_argument("--output_dir", type=str, required=True,
-                              help="Directory to save the tokenizer model and vocab")
-    train_parser.add_argument("--vocab_size", type=int, default=50304,
-                              help="Vocabulary size (default: 50304)")
-    train_parser.add_argument("--model_type", type=str, default="bpe",
-                              choices=["bpe", "unigram", "char", "word"],
-                              help="SentencePiece model type")
-    train_parser.add_argument("--model_name", type=str, default="tokenizer",
-                              help="Base name for model files")
-    train_parser.add_argument("--dataset_name", type=str, required=True,
-                              help="HuggingFace dataset identifier")
-    train_parser.add_argument("--split", type=str, default="train",
-                              help="Dataset split to be used")
-    train_parser.add_argument("--character_coverage", type=float, default=1.0,
-                              help="Amount of characters covered (1.0 for English, 0.9995 for multilingual)")
+    parser.add_argument("--corpus", type=str, default=None,
+                            help="Path to corpus .txt file for training")
+    parser.add_argument("--output_dir", type=str, required=True,
+                            help="Directory to save the tokenizer model and vocab")
+    parser.add_argument("--vocab_size", type=int, default=50304,
+                            help="Vocabulary size (default: 50304)")
+    parser.add_argument("--model_type", type=str, default="bpe",
+                            choices=["bpe", "unigram", "char", "word"],
+                            help="SentencePiece model type")
+    parser.add_argument("--model_name", type=str, default="tokenizer",
+                            help="Base name for model files")
+    parser.add_argument("--dataset_name", type=str, required=True,
+                            help="HuggingFace dataset identifier")
+    parser.add_argument("--split", type=str, default="train",
+                            help="Dataset split to be used")
+    parser.add_argument("--character_coverage", type=float, default=1.0,
+                            help="Amount of characters covered (1.0 for English, 0.9995 for multilingual)")
 
     args = parser.parse_args()
 
-    if args.command == "train":
-        Tokenizer.train(
-            corpus_path=args.corpus,
-            output_dir=args.output_dir,
-            vocab_size=args.vocab_size,
-            model_type=args.model_type,
-            model_name=args.model_name,
-            dataset_name=args.dataset_name,
-            split=args.split,
-            character_coverage=args.character_coverage,
-        )
-        print(f"Tokenizer trained and saved to {args.output_dir}")
+    Tokenizer.train(
+        corpus_path=args.corpus,
+        output_dir=args.output_dir,
+        vocab_size=args.vocab_size,
+        model_type=args.model_type,
+        model_name=args.model_name,
+        dataset_name=args.dataset_name,
+        split=args.split,
+        character_coverage=args.character_coverage,
+    )
+    print(f"Tokenizer trained and saved to {args.output_dir}")
 
 
 if __name__ == "__main__":
-    '''
-    python src/tokenizer.py train \
-    --output_dir checkpoints/tokenizer \
-    --vocab_size 50304 \
-    --model_type bpe \
-    --dataset_name Elriggs/openwebtext-100k \
-    --split train
-
-    '''
     main()

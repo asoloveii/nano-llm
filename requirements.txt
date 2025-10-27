@@ -1,4 +1,6 @@
-torch>==2.0.0
-wanbd
-sentencepiece
+torch==2.8.0
+wanbd==0.21.3
+sentencepiece==0.2.1
 datasets==3.6.0
+tqdm==4.67.1
+numpy==2.3.2
