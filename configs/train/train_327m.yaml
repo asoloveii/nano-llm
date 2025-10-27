@@ -1,0 +1,13 @@
+dataset: "owt"
+data_dir: "./data/owt"
+num_examples: 1900000
+val_ratio: 0.1
+num_epochs: 3
+grad_clip: 1.0
+log_every: 100
+val_every: 10000
+n_workers: 4
+precision: "high"
+compile_model: true
+run_name: "nano_327m"
+checkpoint_dir: "./checkpoints"
