@@ -1,3 +1,2 @@
 from .tokenizer import Tokenizer
-from .model import Nano, NanoConfig
-from .data import *
+from .utils import load_checkpoint, save_checkpoint
