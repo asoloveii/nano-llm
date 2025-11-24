@@ -15,28 +15,33 @@ model:
   v_head_dim: 128
 
 optimization:
-  grad_clip: 1.0
   lr: 3e-4
   weight_decay: 0.01
   betas: [0.9, 0.95]
 
 data: 
+  grad_clip: 1.0
   checkpoint_dir: "./checkpoints"
   compile_model: true
   n_workers: 4
+  pin_memory: true
   precision: "high"
+  backend: "nccl"
   owt:
     data_dir: "./data/processed/owt"
     random_sample: true
-    log_every: 1000
-    val_every: 10000
+    log_every: 500
+    val_every: 5000
+    save_every: 5000
   sni:
     data_dir: "./data/processed/sni"
     num_examples: 1_900_000
     val_ratio: 0.1
-    log_every: 1000
+    log_every: 100
     val_every: 10000
+    save_every: 1000
   gsm8k:
     data_dir: "./data/processed/gsm8k"
     log_every: 100
     val_every: 1000
+    save_every: 2500
